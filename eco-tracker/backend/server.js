@@ -116,6 +116,7 @@ async function sendSMS(to, message) {
 
 // In-memory fallback (used if no DB is connected)
 let reports = [];
+let userProfiles = {}; // Backup memory for locations during the call
 let idCounter = 1;
 
 // Supabase Setup
@@ -187,17 +188,20 @@ function determineArea(phone_number, input_digits) {
 
 // USER PROFILE LOGIC
 async function getUserProfile(phone_number) {
-  if (!useSupabase) return null;
+  if (!useSupabase) return userProfiles[phone_number] || null;
   const { data, error } = await supabase
     .from('user_profiles')
     .select('*') // Select ALL fields including intent
     .eq('phone_number', phone_number)
     .single();
-  if (error) return null;
+  if (error) return userProfiles[phone_number] || null;
   return data;
 }
 
 async function saveUserProfile(phone_number, profileData) {
+  // Always save to backup memory first
+  userProfiles[phone_number] = { ...userProfiles[phone_number], ...profileData };
+
   if (!useSupabase) return;
   const updateData = { phone_number };
   if (profileData.location) updateData.location = profileData.location;

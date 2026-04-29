@@ -101,23 +101,23 @@ function App() {
 
   const simulateReport = async (type: string) => {
     setSimulating(true);
+    const locations = ['1', '2', '3', '4']; // Vidyagiri, Sattur, Malamaddi, Line Bazar
+    const randomLoc = locations[Math.floor(Math.random() * locations.length)];
+    
     try {
-      // 1. Save intent choice first (to simulate the IVR flow)
+      // 1. Save intent choice
       await axios.get(`${API_BASE_URL}/webhook/exotel`, {
-        params: {
-          From: '09611103853',
-          Digits: simIntent === 'need' ? '1' : '2',
-          step: 'intent'
-        }
+        params: { From: '09611103853', Digits: simIntent === 'need' ? '1' : '2', step: 'intent' }
       });
 
-      // 2. Then save the resource report
+      // 2. Save location choice (Randomly pick Sattur, Vidyagiri, etc.)
       await axios.get(`${API_BASE_URL}/webhook/exotel`, {
-        params: {
-          From: '09611103853',
-          Digits: type === 'water' ? '1' : (type === 'electricity' ? '2' : '3'),
-          // No step parameter triggers the final report save
-        }
+        params: { From: '09611103853', Digits: randomLoc, step: 'location' }
+      });
+
+      // 3. Save the resource report
+      await axios.get(`${API_BASE_URL}/webhook/exotel`, {
+        params: { From: '09611103853', Digits: type === 'water' ? '1' : (type === 'electricity' ? '2' : '3') }
       });
 
       // 3. IMMEDIATE REFRESH
