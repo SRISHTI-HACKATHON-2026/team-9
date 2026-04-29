@@ -228,12 +228,12 @@ async function getAllReports() {
     const { data, error } = await supabase
       .from('reports')
       .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
+      .order('created_at', { ascending: false }) // Back to created_at for Supabase
+      .limit(200);
     if (error) console.error('Supabase fetch error:', error);
     return data || [];
   } else if (usePostgres) {
-    const res = await pool.query('SELECT * FROM reports ORDER BY timestamp DESC LIMIT 100');
+    const res = await pool.query('SELECT * FROM reports ORDER BY timestamp DESC LIMIT 200');
     return res.rows;
   } else {
     return [...reports].sort((a, b) => b.timestamp - a.timestamp);
@@ -249,8 +249,8 @@ app.get('/logs', async (req, res) => {
 app.get('/stats', async (req, res) => {
   const allReports = await getAllReports();
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayReports = allReports.filter(r => new Date(r.timestamp || r.created_at) >= todayStart);
+  const todayStart = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+  const todayReports = allReports.filter(r => new Date(r.created_at || r.timestamp) >= todayStart);
 
   const byType = todayReports.reduce((acc, r) => {
     acc[r.resource_type] = (acc[r.resource_type] || 0) + 1;
@@ -381,126 +381,57 @@ app.all('/webhook/check-user', async (req, res) => {
 app.all('/webhook/exotel', async (req, res) => {
   const data = { ...req.query, ...req.body };
   console.log('--- Incoming Exotel Webhook ---');
-  console.log('Step:', data.step || 'No Step');
-  console.log('Digits Received:', data.digits || data.Digits || 'None');
-
-  const phone = data.CallFrom || data.From;
-
-  // HYPER-SENSITIVE DIGIT CATCHER
+  
+  const phone = data.CallFrom || data.From || 'unknown';
+  const step = data.step || 'final';
   let digits = data.digits || data.Digits || data.dtmf || data.current_dtmf || data.DigitsReceived;
+  
   if (digits) {
     digits = digits.toString().replace(/"/g, '').trim();
-    console.log(`🎯 Hyper-Catch: Digits = [${digits}] for Phone = [${phone}]`);
+    console.log(`📡 [Webhook] Phone: ${phone} | Step: ${step} | Digits: [${digits}]`);
   } else {
-    console.log(`⚠️ Warning: No digits detected in this request from ${phone}`);
+    console.log(`⚠️ Warning: No digits for step ${step} from ${phone}`);
   }
 
-  // Step 1: Save Language Choice
-  if (data.step === 'language' || req.query.step === 'language') {
+  // 1. Language Choice
+  if (step === 'language') {
     const langMap = { "1": "kn", "2": "hi", "3": "en" };
     const lang = langMap[digits] || "en";
     await saveUserProfile(phone, { language: lang });
-    console.log(`✅ Saved Language for ${phone}: ${lang}`);
-
-    // ADDING DYNAMIC FEEDBACK LOOP HERE (So you don't have to rebuild Exotel flow!)
-    const allReports = await getAllReports();
-    const userCount = allReports.filter(r => r.phone_number === phone).length;
-    
-    let welcomeMsg = "";
-    if (userCount > 0) {
-      if (lang === 'kn') {
-        welcomeMsg = `ಧನ್ಯವಾದಗಳು. ನೀವು ಈಗಾಗಲೇ ${userCount} ಬಾರಿ ವರದಿ ಮಾಡಿದ್ದೀರಿ.`;
-      } else if (lang === 'hi') {
-        welcomeMsg = `धन्यवाद। आप पहले ही ${userCount} बार रिपोर्ट कर चुके हैं।`;
-      } else {
-        welcomeMsg = `Thank you. You have already contributed ${userCount} reports to the community.`;
-      }
-      // Return voice XML - Exotel will play this and then continue the visual flow!
-      return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">${welcomeMsg}</Say></Response>`);
-    }
-
     return res.send('success');
   }
 
-  // Step 2: Save Location Choice
-  if (data.step === 'location' || req.query.step === 'location') {
-    const area = determineArea(phone, digits);
-    await saveUserProfile(phone, { location: area });
-    console.log(`✅ Saved Location for ${phone}: ${area}`);
-
-    // RETROACTIVE FIX: Update any "Choice Pending" reports from today for this user
-    if (useSupabase && area !== "Choice Pending...") {
-      const today = new Date().toISOString().split('T')[0];
-      const { data: pendingReports } = await supabase
-        .from('reports')
-        .select('id')
-        .eq('phone_number', phone)
-        .eq('area', 'Choice Pending...')
-        .gte('created_at', today);
-
-      if (pendingReports && pendingReports.length > 0) {
-        const ids = pendingReports.map(r => r.id);
-        await supabase.from('reports').update({ area: area }).in('id', ids);
-        console.log(`✨ Retroactively updated ${ids.length} pending reports to ${area}`);
-      }
-    }
-    return res.send('success');
-  }
-
-  // NEW: Step 2.5: Save Intent Choice (Need vs Waste)
-  if (data.step === 'intent' || req.query.step === 'intent') {
+  // 2. Intent Choice (Shortage/Excess)
+  if (step === 'intent') {
     const intent = (digits === '1') ? 'need' : 'waste';
     await saveUserProfile(phone, { intent: intent });
-    console.log(`✅ Saved Intent for ${phone}: ${intent}`);
-    return res.send('success'); // STOP HERE
+    return res.send('success');
   }
 
-  // Step 3: Save Report & Provide Feedback (Runs only if no other step matched)
-  const profile = await getUserProfile(phone);
-  
-  // Robust Mapping for Resource Type
+  // 3. Location Choice
+  if (step === 'location') {
+    const area = determineArea(phone, digits);
+    await saveUserProfile(phone, { location: area });
+    return res.send('success');
+  }
+
+  // 4. FINAL STEP: Resource Choice (Water/Power/Garbage)
   const resourceMap = { "1": "water", "2": "electricity", "3": "waste" };
-  const resource_type = resourceMap[digits] || "waste";
-  const lang = profile?.language || 'en';
-  const intent = profile?.intent || 'waste';
-  
-  let area = "Choice Pending...";
-  if (profile && profile.location) {
-    area = typeof profile.location === 'object' ? profile.location.location || "Choice Pending..." : profile.location;
+  const resource_type = resourceMap[digits];
+
+  if (resource_type) {
+    const profile = await getUserProfile(phone);
+    const intent = profile?.intent || 'waste';
+    const area = (profile && profile.location) ? 
+                 (typeof profile.location === 'object' ? profile.location.location || "Dharwad" : profile.location) 
+                 : "Dharwad";
+
+    await saveReport(phone, resource_type, area, intent);
+    console.log(`✅ SUCCESS! Saved ${resource_type} report for ${phone} in ${area}`);
+    return res.send('report_saved');
   }
 
-  // Save the report first
-  await saveReport(phone, resource_type, area, intent);
-
-  // Fetch actual count for feedback
-  const allReports = await getAllReports();
-  const count = allReports.filter(r => r.phone_number === phone).length;
-  
-  console.log(`✅ Logged Report for ${phone}: ${resource_type} (Count: ${count})`);
-
-  // Build a much richer feedback message
-  let feedbackMsg = "";
-  if (lang === 'kn') {
-    feedbackMsg = `ಧನ್ಯವಾದಗಳು. ನಿಮ್ಮ ${area} ವಲಯದ ${resource_type} ವರದಿಯನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ಇದು ನಿಮ್ಮ ${count}ನೇ ವರದಿ.`;
-  } else if (lang === 'hi') {
-    feedbackMsg = `धन्यवाद। ${area} क्षेत्र के लिए आपकी ${resource_type} रिपोर्ट दर्ज कर ली गई है। यह आपकी ${count}वीं रिपोर्ट है।`;
-  } else {
-    feedbackMsg = `Thank you. Your ${resource_type} report for ${area} has been recorded. This is your report number ${count}. Well done!`;
-  }
-
-  // Return XML with a slight pause for better clarity
-  const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Pause length="1"/>
-    <Say voice="alice" language="${lang === 'en' ? 'en-US' : (lang === 'hi' ? 'hi-IN' : 'en-IN')}">${feedbackMsg}</Say>
-    <Pause length="1"/>
-</Response>`;
-
-  res.type('text/xml').send(xmlResponse);
-
-  // Send SMS confirmation (Async - will appear on virtual phone)
-  const smsMessage = `EcoTracker: Your ${resource_type} report for ${area} is registered (Total: ${count}). Keep it up!`;
-  sendSMS(phone, smsMessage);
+  res.send('ok');
 });
 
 // REST Endpoint for Frontend Simulation Buttons

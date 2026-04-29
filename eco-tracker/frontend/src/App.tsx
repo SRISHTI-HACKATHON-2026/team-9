@@ -81,26 +81,15 @@ function App() {
   useEffect(() => {
     fetchData();
     
-    // Regular polling fallback
-    const interval = setInterval(fetchData, 5000);
+    // 1-second sync for high-impact demo
+    const interval = setInterval(fetchData, 1000);
     
     // SUPABASE REALTIME MAGIC 🚀
     const channel = supabase
       .channel('public:reports')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reports' }, (payload) => {
         console.log('Realtime report received!', payload);
-        fetchData(); // Instantly refresh data when a call finishes
-        
-        // Trigger Virtual SMS
-        if (payload.new) {
-          const r = payload.new;
-          const intentStr = r.intent === 'need' ? 'Shortage' : 'Waste Issue';
-          setLatestSms({
-            phone: r.phone_number,
-            text: `EcoTracker: Your ${r.resource_type} ${intentStr} for ${r.area} is registered. Keep it up!`,
-            time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-          });
-        }
+        fetchData(); 
       })
       .subscribe();
 
@@ -113,15 +102,32 @@ function App() {
   const simulateReport = async (type: string) => {
     setSimulating(true);
     try {
-      const randomPhone = `+91987654${Math.floor(1000 + Math.random() * 9000)}`;
-      await axios.post(`${API_BASE_URL}/report`, { 
-        phone_number: randomPhone, 
-        resource_type: type,
-        intent: simIntent 
+      // 1. Save intent choice first (to simulate the IVR flow)
+      await axios.get(`${API_BASE_URL}/webhook/exotel`, {
+        params: {
+          From: '09611103853',
+          Digits: simIntent === 'need' ? '1' : '2',
+          step: 'intent'
+        }
       });
+
+      // 2. Then save the resource report
+      await axios.get(`${API_BASE_URL}/webhook/exotel`, {
+        params: {
+          From: '09611103853',
+          Digits: type === 'water' ? '1' : (type === 'electricity' ? '2' : '3'),
+          // No step parameter triggers the final report save
+        }
+      });
+
+      // 3. IMMEDIATE REFRESH
       await fetchData();
-    } catch (err) { console.error('Error simulating report', err); }
-    setSimulating(false);
+      setLastUpdated(new Date());
+    } catch (error) {
+      console.error('Simulation failed:', error);
+    } finally {
+      setSimulating(false);
+    }
   };
 
   const resolveAndCall = async (log: any) => {
@@ -169,8 +175,8 @@ function App() {
   // Prepare stacked chart data for Area distribution
   const areaData = Object.entries(stats.byAreaAndIntent || {}).map(([name, intents]) => ({
     name: name,
-    Shortage: intents.need || 0,
-    Waste: intents.waste || 0,
+    need: intents.need || 0,
+    waste: intents.waste || 0,
   }));
 
   // Donut chart data
@@ -473,8 +479,8 @@ function App() {
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} dy={10} />
                     <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} />
                     <Tooltip content={<CustomTooltip />} cursor={{fill: 'rgba(51, 65, 85, 0.2)'}} />
-                    <Bar dataKey="Shortage" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} barSize={32} />
-                    <Bar dataKey="Waste" stackId="a" fill="#10b981" radius={[6, 6, 0, 0]} barSize={32} />
+                    <Bar dataKey="need" name="Shortage" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} barSize={32} />
+                    <Bar dataKey="waste" name="Excess" stackId="a" fill="#10b981" radius={[6, 6, 0, 0]} barSize={32} />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
