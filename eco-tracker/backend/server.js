@@ -24,12 +24,12 @@ async function sendSMS(to, message) {
   const apiKey = process.env.EXOTEL_API_KEY;
   const apiToken = process.env.EXOTEL_API_TOKEN;
   const from = process.env.EXOTEL_SMS_FROM;
-  
+
   if (!sid || !apiKey || !apiToken) {
     console.log('⚠️ SMS skipped: Exotel credentials not configured');
     return;
   }
-  
+
   try {
     const url = `https://api.exotel.com/v1/Accounts/${sid}/Sms/send`;
     await axios.post(url, new URLSearchParams({
@@ -106,7 +106,7 @@ function determineArea(phone_number, input_digits) {
   if (input_digits && input_digits.length === 6 && PINCODE_MAP[input_digits]) {
     return PINCODE_MAP[input_digits];
   }
-  
+
   // Map Menu Choices to Areas
   const choice = input_digits ? input_digits.toString() : "";
   if (choice === "1") return "Vidyagiri";
@@ -122,7 +122,7 @@ async function getUserProfile(phone_number) {
   if (!useSupabase) return null;
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('location')
+    .select('*') // Select ALL fields including intent
     .eq('phone_number', phone_number)
     .single();
   if (error) return null;
@@ -134,25 +134,26 @@ async function saveUserProfile(phone_number, profileData) {
   const updateData = { phone_number };
   if (profileData.location) updateData.location = profileData.location;
   if (profileData.language) updateData.language = profileData.language;
+  if (profileData.intent) updateData.intent = profileData.intent; // Save intent!
   await supabase
     .from('user_profiles')
     .upsert(updateData);
 }
 
-async function saveReport(phone_number, resource_type, area) {
-  const newReport = { phone_number, resource_type, area, timestamp: new Date() };
-  
+async function saveReport(phone_number, resource_type, area, intent = 'waste') {
+  const newReport = { phone_number, resource_type, area, intent, timestamp: new Date() };
+
   if (useSupabase) {
     const { data, error } = await supabase
       .from('reports')
-      .insert([{ phone_number, resource_type, area }])
+      .insert([{ phone_number, resource_type, area, intent }])
       .select();
     if (error) console.error('Supabase insert error:', error);
     return data ? data[0] : null;
   } else if (usePostgres) {
     const res = await pool.query(
-      'INSERT INTO reports (phone_number, resource_type, area) VALUES ($1, $2, $3) RETURNING *',
-      [phone_number, resource_type, area]
+      'INSERT INTO reports (phone_number, resource_type, area, intent) VALUES ($1, $2, $3, $4) RETURNING *',
+      [phone_number, resource_type, area, intent]
     );
     return res.rows[0];
   } else {
@@ -196,11 +197,17 @@ app.get('/stats', async (req, res) => {
     return acc;
   }, {});
 
+  const byIntent = todayReports.reduce((acc, r) => {
+    const intent = r.intent || 'waste';
+    acc[intent] = (acc[intent] || 0) + 1;
+    return acc;
+  }, { need: 0, waste: 0 });
+
   // Clean corrupted area values
   const cleanArea = (area) => {
     if (!area || area === '0' || area === 'Choice Pending...' || area === 'Pending') return null;
     if (typeof area === 'object') return area.location || null;
-    try { const parsed = JSON.parse(area); return parsed.location || null; } catch(e) {}
+    try { const parsed = JSON.parse(area); return parsed.location || null; } catch (e) { }
     return area;
   };
 
@@ -217,6 +224,14 @@ app.get('/stats', async (req, res) => {
     return acc;
   }, {});
 
+  // NEW: Group by Area and Intent for advanced visualization
+  const byAreaAndIntent = cleanedReports.reduce((acc, r) => {
+    if (!acc[r.area]) acc[r.area] = { need: 0, waste: 0 };
+    const intent = r.intent || 'waste';
+    acc[r.area][intent] = (acc[r.area][intent] || 0) + 1;
+    return acc;
+  }, {});
+
   const totalToday = todayReports.length;
   const percentages = {};
   const areaPercentages = {};
@@ -230,7 +245,11 @@ app.get('/stats', async (req, res) => {
   }
 
   const score = Math.max(0, 100 - (totalToday * 5));
-  res.json({ score, totalToday, byType, byArea, byAreaAndType, percentages, areaPercentages });
+  res.json({
+    score, totalToday, byType, byArea,
+    byAreaAndType, byIntent, byAreaAndIntent,
+    percentages, areaPercentages
+  });
 });
 
 app.get('/insights', async (req, res) => {
@@ -238,7 +257,7 @@ app.get('/insights', async (req, res) => {
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const todayReports = allReports.filter(r => new Date(r.timestamp || r.created_at).getTime() >= todayStart);
-  
+
   const nudges = [];
 
   // 1. Check for Hotspots (Areas with >= 3 reports)
@@ -274,7 +293,7 @@ app.all('/webhook/check-user', async (req, res) => {
   const data = req.method === 'POST' ? req.body : req.query;
   const phone = data.CallFrom || data.From;
   const profile = await getUserProfile(phone);
-  
+
   if (profile) res.status(200).send('registered');
   else res.status(404).send('new');
 });
@@ -285,10 +304,17 @@ app.all('/webhook/exotel', async (req, res) => {
   console.log('--- Incoming Exotel Webhook ---');
   console.log('Step:', data.step || 'No Step');
   console.log('Digits Received:', data.digits || data.Digits || 'None');
-  
+
   const phone = data.CallFrom || data.From;
-  let digits = data.digits || data.Digits;
-  if (digits) digits = digits.toString().replace(/"/g, '').trim();
+
+  // HYPER-SENSITIVE DIGIT CATCHER
+  let digits = data.digits || data.Digits || data.dtmf || data.current_dtmf || data.DigitsReceived;
+  if (digits) {
+    digits = digits.toString().replace(/"/g, '').trim();
+    console.log(`🎯 Hyper-Catch: Digits = [${digits}] for Phone = [${phone}]`);
+  } else {
+    console.log(`⚠️ Warning: No digits detected in this request from ${phone}`);
+  }
 
   // Step 1: Save Language Choice
   if (data.step === 'language' || req.query.step === 'language') {
@@ -303,40 +329,92 @@ app.all('/webhook/exotel', async (req, res) => {
   if (data.step === 'location' || req.query.step === 'location') {
     const area = determineArea(phone, digits);
     await saveUserProfile(phone, { location: area });
-    
-    if (useSupabase) {
-      const { data: latest } = await supabase
+    console.log(`✅ Saved Location for ${phone}: ${area}`);
+
+    // RETROACTIVE FIX: Update any "Choice Pending" reports from today for this user
+    if (useSupabase && area !== "Choice Pending...") {
+      const today = new Date().toISOString().split('T')[0];
+      const { data: pendingReports } = await supabase
         .from('reports')
         .select('id')
         .eq('phone_number', phone)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      
-      if (latest && latest.length > 0) {
-        await supabase.from('reports').update({ area: area }).eq('id', latest[0].id);
+        .eq('area', 'Choice Pending...')
+        .gte('created_at', today);
+
+      if (pendingReports && pendingReports.length > 0) {
+        const ids = pendingReports.map(r => r.id);
+        await supabase.from('reports').update({ area: area }).in('id', ids);
+        console.log(`✨ Retroactively updated ${ids.length} pending reports to ${area}`);
       }
     }
-    
-    console.log(`✅ Updated Profile and Report for ${phone}: ${area}`);
     return res.send('success');
   }
 
-  // Step 3: Save Report
+  // NEW: Step 2.5: Save Intent Choice (Need vs Waste)
+  if (data.step === 'intent' || req.query.step === 'intent') {
+    const intent = (digits === '1') ? 'need' : 'waste';
+    await saveUserProfile(phone, { intent: intent });
+    console.log(`✅ Saved Intent for ${phone}: ${intent}`);
+    return res.send('success'); // STOP HERE
+  }
+
+  // Step 3: Save Report & Provide Feedback (Runs only if no other step matched)
   const profile = await getUserProfile(phone);
-  const resource_type = digits === '1' ? 'water' : digits === '2' ? 'electricity' : 'waste';
+  
+  // Robust Mapping for Resource Type
+  let resource_type = 'waste';
+  if (digits === '1') resource_type = 'water';
+  else if (digits === '2') resource_type = 'electricity';
+  else if (digits === '3') resource_type = 'waste';
+  
+  // Check if intent was saved in a previous step, else default to 'waste'
+  const intent = profile?.intent || (data.intent === 'need' ? 'need' : 'waste');
+  
+  console.log(`📡 Final Processing: Digits [${digits}] -> Type [${resource_type}] | Intent [${intent}]`);
+  
   let area = "Choice Pending...";
   if (profile && profile.location) {
     area = typeof profile.location === 'object' ? profile.location.location || "Choice Pending..." : profile.location;
   }
   
-  await saveReport(phone, resource_type, area);
-  console.log(`✅ Logged Report for ${phone}: ${resource_type} (Area: ${area})`);
+  await saveReport(phone, resource_type, area, intent);
+  
+  // FETCH HISTORY FOR FEEDBACK
+  const allReports = await getAllReports();
+  const userCount = allReports.filter(r => r.phone_number === phone).length;
+  const lang = profile?.language || 'en';
 
-  // Send SMS confirmation
-  const smsMessage = `EcoTracker: Your ${resource_type} complaint for ${area} has been registered. We are on it. Thank you for helping keep Dharwad clean!`;
+  // DYNAMIC FEEDBACK MESSAGE
+  let feedbackMsg = "";
+  if (lang === 'kn') {
+    feedbackMsg = `ಧನ್ಯವಾದಗಳು. ಇದು ನಿಮ್ಮ ${userCount} ನೇ ವರದಿ. ಧಾರವಾಡದ ಸುಸ್ಥಿರತೆಗೆ ನಿಮ್ಮ ಕೊಡುಗೆ ಅಪಾರ.`;
+  } else if (lang === 'hi') {
+    feedbackMsg = `धन्यवाद। यह आपकी ${userCount} वीं रिपोर्ट है। धारवाड़ को स्वच्छ रखने में आपकी मदद सराहनीय है।`;
+  } else {
+    feedbackMsg = `Thank you. This is your report number ${userCount}. You are helping Dharwad stay clean and sustainable!`;
+  }
+
+  console.log(`✅ Logged Report for ${phone}: ${resource_type} (Count: ${userCount})`);
+
+  // Send SMS confirmation (Async)
+  const smsMessage = `EcoTracker: Your ${resource_type} ${intent} for ${area} is registered (Report #${userCount}). Keep it up!`;
   sendSMS(phone, smsMessage);
 
-  res.send('success');
+  // RETURN XML FEEDBACK TO EXOTEL
+  res.type('text/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="alice">${feedbackMsg}</Say></Response>`);
+});
+
+// REST Endpoint for Frontend Simulation Buttons
+app.post('/report', async (req, res) => {
+  try {
+    const { phone_number, resource_type, area = "Vidyagiri", intent = "waste" } = req.body;
+    const report = await saveReport(phone_number, resource_type, area, intent);
+    res.status(201).json(report);
+  } catch (error) {
+    console.error("Simulation error:", error);
+    res.status(500).json({ error: "Failed to save report" });
+  }
 });
 
 app.post('/webhook/call', (req, res) => {
@@ -346,8 +424,15 @@ app.post('/webhook/call', (req, res) => {
 
 app.post('/webhook/process', async (req, res) => {
   const { From, Digits } = req.body;
-  const type = Digits === '1' ? 'water' : Digits === '2' ? 'electricity' : 'waste';
-  await saveReport(From, type, determineArea(From));
+  let digits = Digits ? Digits.toString().replace(/"/g, '').trim() : '';
+
+  let type = 'waste';
+  if (digits === '1') type = 'water';
+  else if (digits === '2') type = 'electricity';
+  else type = 'waste';
+
+  console.log(`📡 Webhook Process: Digits [${digits}] -> Type [${type}]`);
+  await saveReport(From, type, determineArea(From, digits));
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Say>Logged.</Say></Response>`);
 });
 

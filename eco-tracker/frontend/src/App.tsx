@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
-import { Droplet, Zap, Trash2, PhoneCall, AlertTriangle, TrendingDown, TrendingUp, Info, Activity, MapPin, Shield } from 'lucide-react';
+import { Droplet, Zap, Trash2, PhoneCall, AlertTriangle, TrendingDown, TrendingUp, Info, Activity, MapPin, Shield, Lock, Mail, Key, ArrowRight, UserPlus, LogOut, Smartphone, MessageSquare } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
 
 const API_BASE_URL = 'http://localhost:3002';
+
+// Supabase Initialization (Hardcoded for hackathon speed, should use env in production)
+const supabaseUrl = 'https://gajnmbgelmpljtbjvhoc.supabase.co';
+const supabaseKey = 'sb_publishable_tdDYl42zvN_B0gfk-y7i8w_Q8PlEJXs';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const ADMIN_EMAIL = 'sanjeevkumarnadgir@gmail.com';
+
 
 interface StatsData {
   score: number;
@@ -11,19 +20,47 @@ interface StatsData {
   byType: Record<string, number>;
   byArea: Record<string, number>;
   byAreaAndType: Record<string, Record<string, number>>;
+  byIntent: { need: number; waste: number };
+  byAreaAndIntent: Record<string, { need: number; waste: number }>;
   percentages: Record<string, string>;
   areaPercentages: Record<string, string>;
 }
 
 function App() {
+  const [session, setSession] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authMsg, setAuthMsg] = useState('');
+
   const [stats, setStats] = useState<StatsData>({ 
     score: 100, totalToday: 0, byType: {}, byArea: {}, 
-    byAreaAndType: {}, percentages: {}, areaPercentages: {} 
+    byAreaAndType: {}, byIntent: { need: 0, waste: 0 }, byAreaAndIntent: {},
+    percentages: {}, areaPercentages: {} 
   });
   const [logs, setLogs] = useState<any[]>([]);
   const [insights, setInsights] = useState<any[]>([]);
   const [simulating, setSimulating] = useState(false);
+  const [simIntent, setSimIntent] = useState<'need' | 'waste'>('waste');
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [latestSms, setLatestSms] = useState<{phone: string, text: string, time: string} | null>(null);
+
+  useEffect(() => {
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    // Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -43,15 +80,45 @@ function App() {
 
   useEffect(() => {
     fetchData();
+    
+    // Regular polling fallback
     const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    
+    // SUPABASE REALTIME MAGIC 🚀
+    const channel = supabase
+      .channel('public:reports')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reports' }, (payload) => {
+        console.log('Realtime report received!', payload);
+        fetchData(); // Instantly refresh data when a call finishes
+        
+        // Trigger Virtual SMS
+        if (payload.new) {
+          const r = payload.new;
+          const intentStr = r.intent === 'need' ? 'Shortage' : 'Waste Issue';
+          setLatestSms({
+            phone: r.phone_number,
+            text: `EcoTracker: Your ${r.resource_type} ${intentStr} for ${r.area} is registered. Keep it up!`,
+            time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+          });
+        }
+      })
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const simulateReport = async (type: string) => {
     setSimulating(true);
     try {
       const randomPhone = `+91987654${Math.floor(1000 + Math.random() * 9000)}`;
-      await axios.post(`${API_BASE_URL}/report`, { phone_number: randomPhone, resource_type: type });
+      await axios.post(`${API_BASE_URL}/report`, { 
+        phone_number: randomPhone, 
+        resource_type: type,
+        intent: simIntent 
+      });
       await fetchData();
     } catch (err) { console.error('Error simulating report', err); }
     setSimulating(false);
@@ -78,12 +145,11 @@ function App() {
     return 'border-blue-500/20 bg-blue-500/5';
   };
 
-  // Prepare stacked chart data
-  const areaData = Object.entries(stats.byAreaAndType || {}).map(([name, types]) => ({
-    name: name === 'Choice Pending...' ? 'Pending' : name,
-    Water: types.water || 0,
-    Electricity: types.electricity || 0,
-    Waste: types.waste || 0,
+  // Prepare stacked chart data for Area distribution
+  const areaData = Object.entries(stats.byAreaAndIntent || {}).map(([name, intents]) => ({
+    name: name,
+    Shortage: intents.need || 0,
+    Waste: intents.waste || 0,
   }));
 
   // Donut chart data
@@ -115,12 +181,101 @@ function App() {
   };
 
   // Score SVG ring
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthMsg('');
+
+    if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      setAuthError(`Unauthorized. Only ${ADMIN_EMAIL} can access this dashboard.`);
+      return;
+    }
+
+    try {
+      if (authMode === 'login') {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else if (authMode === 'signup') {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setAuthMsg('Check your email for confirmation!');
+      } else if (authMode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email);
+        if (error) throw error;
+        setAuthMsg('Reset link sent to your email!');
+      }
+    } catch (err: any) { setAuthError(err.message); }
+  };
+
+  const handleLogout = async () => { await supabase.auth.signOut(); };
+
+  if (loading) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="w-12 h-12 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin"></div>
+    </div>
+  );
+
+  if (!session) return (
+    <div className="min-h-screen bg-slate-950 bg-grid flex items-center justify-center p-4">
+      <div className="max-w-md w-full">
+        <div className="bg-slate-900/60 backdrop-blur-2xl rounded-3xl p-8 border border-slate-800/60 relative overflow-hidden shadow-2xl">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-500"></div>
+          
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-4">
+              <Shield className="w-8 h-8 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold text-white tracking-tight text-center">EcoTracker</h1>
+            <p className="text-slate-400 text-sm mt-1">Admin Dashboard Login</p>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-500 uppercase">Email Address</label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-white focus:outline-none focus:border-emerald-500/50" />
+              </div>
+            </div>
+            {authMode !== 'forgot' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Password</label>
+                <div className="relative">
+                  <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="w-full bg-slate-950/50 border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-white focus:outline-none focus:border-emerald-500/50" />
+                </div>
+              </div>
+            )}
+            {authError && <div className="text-red-400 text-xs py-2 px-4 rounded-lg bg-red-500/10 border border-red-500/20">{authError}</div>}
+            {authMsg && <div className="text-emerald-400 text-xs py-2 px-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20">{authMsg}</div>}
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2">
+              {authMode === 'login' ? 'Sign In' : authMode === 'signup' ? 'Sign Up' : 'Reset Password'}
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
+
+          <div className="mt-8 pt-6 border-t border-slate-800/50 flex flex-col gap-3 text-center">
+            {authMode === 'login' ? (
+              <>
+                <button onClick={() => setAuthMode('forgot')} className="text-xs text-slate-500 hover:text-emerald-400 transition-colors">Forgot password?</button>
+                <button onClick={() => setAuthMode('signup')} className="text-xs text-slate-400 hover:text-white transition-colors">No account? Sign up</button>
+              </>
+            ) : (
+              <button onClick={() => setAuthMode('login')} className="text-xs text-slate-400 hover:text-white transition-colors">Back to Login</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const scorePercent = stats.score;
   const circumference = 2 * Math.PI * 54;
   const strokeDashoffset = circumference - (scorePercent / 100) * circumference;
   const scoreColor = scorePercent > 80 ? '#34d399' : scorePercent > 50 ? '#fbbf24' : '#f87171';
 
   return (
+
     <div className="min-h-screen bg-slate-950 bg-grid text-slate-200 p-4 md:p-8">
       <div className="max-w-[1440px] mx-auto space-y-6">
         
@@ -150,9 +305,28 @@ function App() {
             </div>
           </div>
           
-          {/* Simulate Buttons */}
-          <div className="flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-xl border border-slate-800">
-            <span className="text-xs font-medium text-slate-500 px-2 hidden sm:block">Test:</span>
+          <div className="flex items-center gap-4">
+            <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900/80 border border-slate-800 text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition-all">
+              <LogOut className="w-3.5 h-3.5" /> Logout
+            </button>
+            
+            <div className="flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-xl border border-slate-800">
+              <div className="flex bg-slate-950/50 p-1 rounded-lg border border-slate-800 mr-2">
+                <button 
+                  onClick={() => setSimIntent('waste')}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${simIntent === 'waste' ? 'bg-emerald-500 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                  WASTE
+                </button>
+                <button 
+                  onClick={() => setSimIntent('need')}
+                  className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${simIntent === 'need' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                >
+                  NEED
+                </button>
+              </div>
+              
+              <span className="text-xs font-medium text-slate-500 px-2 hidden sm:block">Test:</span>
             <button onClick={() => simulateReport('water')} disabled={simulating}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 hover:border-blue-500/40 disabled:opacity-50">
               <Droplet className="w-3.5 h-3.5" /> Water
@@ -167,6 +341,7 @@ function App() {
             </button>
           </div>
         </div>
+      </div>
 
         {/* ─── Stats Cards ─── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -251,7 +426,7 @@ function App() {
         </div>
 
         {/* ─── Main Content Grid ─── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           
           {/* Stacked Area Chart */}
           <div className="lg:col-span-2 card-glow bg-slate-900/60 backdrop-blur-xl rounded-2xl p-6 border border-slate-800/60 relative overflow-hidden">
@@ -262,8 +437,7 @@ function App() {
                 <h3 className="text-slate-300 font-semibold text-sm">Area Breakdown</h3>
               </div>
               <div className="flex items-center gap-4 text-[10px]">
-                <span className="flex items-center gap-1.5"><span className="legend-dot" style={{background:'#3b82f6'}}></span><span className="text-slate-400">Water</span></span>
-                <span className="flex items-center gap-1.5"><span className="legend-dot" style={{background:'#f59e0b'}}></span><span className="text-slate-400">Power</span></span>
+                <span className="flex items-center gap-1.5"><span className="legend-dot" style={{background:'#f59e0b'}}></span><span className="text-slate-400">Need</span></span>
                 <span className="flex items-center gap-1.5"><span className="legend-dot" style={{background:'#10b981'}}></span><span className="text-slate-400">Waste</span></span>
               </div>
             </div>
@@ -273,28 +447,13 @@ function App() {
               <div className="flex-1">
                 {areaData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={areaData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }} barSize={36} barGap={4}>
-                      <defs>
-                        <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#60a5fa" />
-                          <stop offset="100%" stopColor="#2563eb" />
-                        </linearGradient>
-                        <linearGradient id="powerGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#fbbf24" />
-                          <stop offset="100%" stopColor="#d97706" />
-                        </linearGradient>
-                        <linearGradient id="wasteGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#34d399" />
-                          <stop offset="100%" stopColor="#059669" />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                      <XAxis dataKey="name" stroke="#334155" tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 500}} tickLine={false} axisLine={false} />
-                      <YAxis stroke="#334155" tick={{fill: '#475569', fontSize: 10}} tickLine={false} axisLine={false} allowDecimals={false} />
-                      <Tooltip content={<CustomTooltip />} cursor={{fill: '#1e293b', opacity: 0.5, radius: 6}} />
-                      <Bar dataKey="Water" stackId="a" fill="url(#waterGrad)" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="Electricity" stackId="a" fill="url(#powerGrad)" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="Waste" stackId="a" fill="url(#wasteGrad)" radius={[6, 6, 0, 0]} />
+                    <BarChart data={areaData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} dy={10} />
+                    <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 10}} />
+                    <Tooltip content={<CustomTooltip />} cursor={{fill: 'rgba(51, 65, 85, 0.2)'}} />
+                    <Bar dataKey="Shortage" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} barSize={32} />
+                    <Bar dataKey="Waste" stackId="a" fill="#10b981" radius={[6, 6, 0, 0]} barSize={32} />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -380,6 +539,45 @@ function App() {
               </div>
             </div>
           </div>
+
+          {/* Virtual Phone SMS Simulator (Hackathon Special) */}
+          <div className="card-glow bg-slate-900/60 backdrop-blur-xl rounded-2xl p-4 border border-slate-800/60 flex flex-col relative overflow-hidden">
+            <div className="flex items-center gap-2 mb-4">
+              <Smartphone className="w-4 h-4 text-emerald-400" />
+              <h3 className="text-white font-semibold text-sm">Virtual Phone</h3>
+            </div>
+            
+            <div className="flex-1 bg-slate-950 rounded-2xl border border-slate-800 p-3 flex flex-col relative">
+              {/* Phone Header */}
+              <div className="flex justify-between items-center pb-3 border-b border-slate-800/50 mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                    <MessageSquare className="w-3 h-3 text-emerald-400" />
+                  </div>
+                  <span className="text-xs text-slate-300 font-medium">EcoTracker SMS</span>
+                </div>
+              </div>
+
+              {/* SMS Bubble */}
+              <div className="flex-1 overflow-y-auto flex flex-col justify-end gap-3 pb-2">
+                {latestSms ? (
+                  <div className="bg-slate-800/80 rounded-2xl rounded-tl-sm p-3 border border-slate-700/50 shadow-lg" style={{ animation: 'slideUp 0.3s ease-out' }}>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">{latestSms.text}</p>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-[9px] text-slate-500">{latestSms.time}</span>
+                      <span className="text-[9px] text-emerald-500 font-medium">{latestSms.phone.substring(0,6)}****</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full opacity-50 pb-6">
+                    <MessageSquare className="w-6 h-6 text-slate-600 mb-2" />
+                    <span className="text-[10px] text-slate-500 text-center leading-relaxed">Waiting for live call...<br/>SMS will appear here instantly.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
         </div>
 
         {/* ─── Live Feed ─── */}
