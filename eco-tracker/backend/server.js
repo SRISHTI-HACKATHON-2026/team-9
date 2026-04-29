@@ -115,8 +115,7 @@ async function sendSMS(to, message) {
 }
 
 // In-memory fallback (used if no DB is connected)
-let reports = [];
-let userProfiles = {}; // Backup memory for locations during the call
+// Strictly using Supabase for all data.
 let idCounter = 1;
 
 // Supabase Setup
@@ -188,25 +187,22 @@ function determineArea(phone_number, input_digits) {
 
 // USER PROFILE LOGIC
 async function getUserProfile(phone_number) {
-  if (!useSupabase) return userProfiles[phone_number] || null;
+  if (!useSupabase) return null;
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('*') // Select ALL fields including intent
+    .select('*')
     .eq('phone_number', phone_number)
     .single();
-  if (error) return userProfiles[phone_number] || null;
-  return data;
+  return data || null;
 }
 
 async function saveUserProfile(phone_number, profileData) {
-  // Always save to backup memory first
-  userProfiles[phone_number] = { ...userProfiles[phone_number], ...profileData };
-
   if (!useSupabase) return;
   const updateData = { phone_number };
   if (profileData.location) updateData.location = profileData.location;
   if (profileData.language) updateData.language = profileData.language;
-  if (profileData.intent) updateData.intent = profileData.intent; // Save intent!
+  if (profileData.intent) updateData.intent = profileData.intent;
+  
   await supabase
     .from('user_profiles')
     .upsert(updateData);
@@ -220,36 +216,24 @@ async function saveReport(phone_number, resource_type, area, intent = 'waste') {
       .from('reports')
       .insert([{ phone_number, resource_type, area, intent }])
       .select();
-    if (error) console.error('Supabase insert error:', error);
+
+    if (error) console.error('Error saving report to Supabase:', error);
     return data ? data[0] : null;
-  } else if (usePostgres) {
-    const res = await pool.query(
-      'INSERT INTO reports (phone_number, resource_type, area, intent) VALUES ($1, $2, $3, $4) RETURNING *',
-      [phone_number, resource_type, area, intent]
-    );
-    return res.rows[0];
-  } else {
-    newReport.id = idCounter++;
-    reports.push(newReport);
-    return newReport;
   }
+  return null;
 }
 
 async function getAllReports() {
-  if (useSupabase) {
-    const { data, error } = await supabase
-      .from('reports')
-      .select('*')
-      .order('created_at', { ascending: false }) // Back to created_at for Supabase
-      .limit(200);
-    if (error) console.error('Supabase fetch error:', error);
-    return data || [];
-  } else if (usePostgres) {
-    const res = await pool.query('SELECT * FROM reports ORDER BY timestamp DESC LIMIT 200');
-    return res.rows;
-  } else {
-    return [...reports].sort((a, b) => b.timestamp - a.timestamp);
+  if (!useSupabase) return [];
+  const { data, error } = await supabase
+    .from('reports')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('Error fetching reports:', error);
+    return [];
   }
+  return data || [];
 }
 
 // API Endpoints
