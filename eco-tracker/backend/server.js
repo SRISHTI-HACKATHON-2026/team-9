@@ -434,7 +434,7 @@ app.all('/webhook/exotel', async (req, res) => {
     console.log(`👤 [Profile] Found for ${phone}:`, profile);
 
     const intent = profile?.intent || 'waste';
-    const area = profile?.location || "Sattur"; // Change default from Dharwad to Sattur to see if it changes
+    const area = profile?.location || "Area Not Selected"; 
 
     await saveReport(phone, resource_type, area, intent);
     console.log(`✅ SUCCESS! Saved ${resource_type} report for ${phone} in ${area}`);
