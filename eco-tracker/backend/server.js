@@ -160,9 +160,9 @@ if (process.env.DATABASE_URL) {
   console.log('No DB URI provided, using in-memory storage for MVP.');
 }
 
-// LOCAL AREA MAPPING (Dharwad Focus)
+// LOCAL AREA MAPPING
 const PINCODE_MAP = {
-  "580001": "Dharwad Central",
+  "580001": "Central Zone",
   "580002": "Vidyagiri",
   "580003": "Sattur",
   "580004": "Malamaddi",
@@ -176,7 +176,7 @@ function determineArea(phone_number, input_digits) {
   }
 
   // Map Menu Choices to Areas
-  const choice = input_digits ? input_digits.toString() : "";
+  const choice = input_digits ? input_digits.toString().trim() : "";
   if (choice === "1") return "Vidyagiri";
   if (choice === "2") return "Sattur";
   if (choice === "3") return "Malamaddi";
@@ -394,10 +394,10 @@ app.all('/webhook/exotel', async (req, res) => {
   
   const phone = data.CallFrom || data.From || 'unknown';
   const step = data.step || 'final';
-  let digits = data.digits || data.Digits || data.dtmf || data.current_dtmf || data.DigitsReceived;
+  let digits = (data.Digits || data.digits || data.dtmf || data.current_dtmf || data.DigitsReceived || "").toString().trim();
   
   if (digits) {
-    digits = digits.toString().replace(/"/g, '').trim();
+    digits = digits.replace(/"/g, '').trim();
     console.log(`📡 [Webhook] Phone: ${phone} | Step: ${step} | Digits: [${digits}]`);
   } else {
     console.log(`⚠️ Warning: No digits for step ${step} from ${phone}`);
