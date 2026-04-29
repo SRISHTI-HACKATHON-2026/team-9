@@ -4,11 +4,11 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { Droplet, Zap, Trash2, PhoneCall, AlertTriangle, TrendingDown, TrendingUp, Info, Activity, MapPin, Shield, Lock, Mail, Key, ArrowRight, UserPlus, LogOut, Smartphone, MessageSquare } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
-const API_BASE_URL = 'http://localhost:3002';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002';
 
-// Supabase Initialization (Hardcoded for hackathon speed, should use env in production)
-const supabaseUrl = 'https://gajnmbgelmpljtbjvhoc.supabase.co';
-const supabaseKey = 'sb_publishable_tdDYl42zvN_B0gfk-y7i8w_Q8PlEJXs';
+// Supabase Initialization
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://gajnmbgelmpljtbjvhoc.supabase.co';
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_tdDYl42zvN_B0gfk-y7i8w_Q8PlEJXs';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const ADMIN_EMAIL = 'sanjeevkumarnadgir@gmail.com';

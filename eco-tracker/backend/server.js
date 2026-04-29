@@ -507,4 +507,8 @@ app.post('/webhook/process', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3002;
-app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));
+}
+
+module.exports = app;
