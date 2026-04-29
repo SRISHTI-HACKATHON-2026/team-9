@@ -72,7 +72,9 @@ async function triggerTwilioCall(toPhone, area, resource) {
     params.append('To', cleanPhone);
     params.append('From', from);
     const BACKEND_URL = process.env.BACKEND_URL || process.env.NGROK_URL || '';
-    params.append('Url', `${BACKEND_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`);
+    const webhookUrl = `${BACKEND_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`;
+    console.log(`🔗 [Twilio] Webhook URL: ${webhookUrl}`);
+    params.append('Url', webhookUrl);
 
     const response = await axios.post(url, params, {
       auth: { username: sid, password: token }
