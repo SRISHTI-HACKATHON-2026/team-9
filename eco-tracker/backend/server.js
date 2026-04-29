@@ -203,9 +203,12 @@ async function saveUserProfile(phone_number, profileData) {
   if (profileData.language) updateData.language = profileData.language;
   if (profileData.intent) updateData.intent = profileData.intent;
   
-  await supabase
+  const { error } = await supabase
     .from('user_profiles')
-    .upsert(updateData);
+    .upsert(updateData, { onConflict: 'phone_number' });
+    
+  if (error) console.error('❌ [Supabase] Profile Save Error:', error.message);
+  else console.log(`✅ [Supabase] Profile updated for ${phone_number}`);
 }
 
 async function saveReport(phone_number, resource_type, area, intent = 'waste') {
@@ -422,10 +425,10 @@ app.all('/webhook/exotel', async (req, res) => {
 
   if (resource_type) {
     const profile = await getUserProfile(phone);
+    console.log(`👤 [Profile] Found for ${phone}:`, profile);
+
     const intent = profile?.intent || 'waste';
-    const area = (profile && profile.location) ? 
-                 (typeof profile.location === 'object' ? profile.location.location || "Dharwad" : profile.location) 
-                 : "Dharwad";
+    const area = profile?.location || "Sattur"; // Change default from Dharwad to Sattur to see if it changes
 
     await saveReport(phone, resource_type, area, intent);
     console.log(`✅ SUCCESS! Saved ${resource_type} report for ${phone} in ${area}`);
