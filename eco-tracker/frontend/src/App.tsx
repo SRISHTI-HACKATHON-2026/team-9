@@ -124,6 +124,27 @@ function App() {
     setSimulating(false);
   };
 
+  const resolveAndCall = async (log: any) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/resolve-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reportId: log.id || log._id,
+          phone_number: log.phone_number,
+          area: log.area,
+          resource_type: log.resource_type
+        })
+      });
+      if (response.ok) {
+        alert(`📞 Calling ${log.phone_number}... \n"Your ${log.resource_type} report for ${log.area} has been resolved!"`);
+        await fetchData();
+      }
+    } catch (error) {
+      console.error('Resolution error:', error);
+    }
+  };
+
   const getIconForType = (type: string) => {
     if (type === 'water') return <Droplet className="w-4 h-4 text-blue-400" />;
     if (type === 'electricity') return <Zap className="w-4 h-4 text-amber-400" />;
@@ -618,6 +639,20 @@ function App() {
                     </span>
                   </div>
                 </div>
+                
+                {/* Resolve & Call Button */}
+                <button 
+                  onClick={() => resolveAndCall(log)}
+                  disabled={log.status === 'resolved'}
+                  className={`flex-shrink-0 p-2 rounded-lg transition-all border ${
+                    log.status === 'resolved' 
+                    ? 'bg-slate-900 text-slate-700 border-slate-800 cursor-not-allowed' 
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500 hover:text-white'
+                  }`}
+                  title="Resolve and send Voice Update Call"
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                </button>
               </div>
             ))}
             {logs.length === 0 && (
