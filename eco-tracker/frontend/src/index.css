@@ -2,25 +2,95 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
 @layer base {
   body {
-    @apply bg-slate-900 text-slate-200;
+    @apply bg-slate-950 text-slate-200;
+    font-family: 'Inter', system-ui, sans-serif;
   }
 }
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+/* Animated gradient background */
+.bg-grid {
+  background-image: 
+    radial-gradient(circle at 25% 25%, rgba(16, 185, 129, 0.04) 0%, transparent 50%),
+    radial-gradient(circle at 75% 75%, rgba(59, 130, 246, 0.04) 0%, transparent 50%);
 }
 
+/* Card glow on hover */
+.card-glow {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.card-glow:hover {
+  box-shadow: 0 0 30px -5px rgba(59, 130, 246, 0.15), 0 20px 40px -15px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+  border-color: rgba(100, 116, 139, 0.4);
+}
+
+/* Pulse ring animation */
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.pulse-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Shimmer effect for loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+/* Smooth number transitions */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
-
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #1e293b;
   border-radius: 10px;
 }
-
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #334155;
+}
+
+/* Feed item entrance animation */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.feed-item {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Score ring */
+.score-ring {
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Legend dot */
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }

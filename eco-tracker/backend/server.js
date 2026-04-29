@@ -17,6 +17,35 @@ app.get('/test', (req, res) => {
   res.send('Server is Live and Running Latest Code!');
 });
 
+// SMS via Exotel
+const axios = require('axios');
+async function sendSMS(to, message) {
+  const sid = process.env.EXOTEL_SID;
+  const apiKey = process.env.EXOTEL_API_KEY;
+  const apiToken = process.env.EXOTEL_API_TOKEN;
+  const from = process.env.EXOTEL_SMS_FROM;
+  
+  if (!sid || !apiKey || !apiToken) {
+    console.log('⚠️ SMS skipped: Exotel credentials not configured');
+    return;
+  }
+  
+  try {
+    const url = `https://api.exotel.com/v1/Accounts/${sid}/Sms/send`;
+    await axios.post(url, new URLSearchParams({
+      From: from,
+      To: to,
+      Body: message
+    }).toString(), {
+      auth: { username: apiKey, password: apiToken },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    console.log(`📲 SMS sent to ${to}`);
+  } catch (err) {
+    console.log(`⚠️ SMS failed for ${to}:`, err.response?.data || err.message);
+  }
+}
+
 // In-memory fallback (used if no DB is connected)
 let reports = [];
 let idCounter = 1;
@@ -100,11 +129,14 @@ async function getUserProfile(phone_number) {
   return data;
 }
 
-async function saveUserProfile(phone_number, location) {
+async function saveUserProfile(phone_number, profileData) {
   if (!useSupabase) return;
+  const updateData = { phone_number };
+  if (profileData.location) updateData.location = profileData.location;
+  if (profileData.language) updateData.language = profileData.language;
   await supabase
     .from('user_profiles')
-    .upsert({ phone_number, location });
+    .upsert(updateData);
 }
 
 async function saveReport(phone_number, resource_type, area) {
@@ -164,28 +196,72 @@ app.get('/stats', async (req, res) => {
     return acc;
   }, {});
 
-  const byArea = todayReports.reduce((acc, r) => {
+  // Clean corrupted area values
+  const cleanArea = (area) => {
+    if (!area || area === '0' || area === 'Choice Pending...' || area === 'Pending') return null;
+    if (typeof area === 'object') return area.location || null;
+    try { const parsed = JSON.parse(area); return parsed.location || null; } catch(e) {}
+    return area;
+  };
+
+  const cleanedReports = todayReports.map(r => ({ ...r, area: cleanArea(r.area) })).filter(r => r.area);
+
+  const byArea = cleanedReports.reduce((acc, r) => {
     acc[r.area] = (acc[r.area] || 0) + 1;
     return acc;
   }, {});
 
-  const score = Math.max(0, 100 - (todayReports.length * 5));
-  res.json({ score, totalToday: todayReports.length, byType, byArea });
+  const byAreaAndType = cleanedReports.reduce((acc, r) => {
+    if (!acc[r.area]) acc[r.area] = { water: 0, electricity: 0, waste: 0 };
+    acc[r.area][r.resource_type] = (acc[r.area][r.resource_type] || 0) + 1;
+    return acc;
+  }, {});
+
+  const totalToday = todayReports.length;
+  const percentages = {};
+  const areaPercentages = {};
+  if (totalToday > 0) {
+    for (const [type, count] of Object.entries(byType)) {
+      percentages[type] = ((count / totalToday) * 100).toFixed(1);
+    }
+    for (const [area, count] of Object.entries(byArea)) {
+      areaPercentages[area] = ((count / totalToday) * 100).toFixed(1);
+    }
+  }
+
+  const score = Math.max(0, 100 - (totalToday * 5));
+  res.json({ score, totalToday, byType, byArea, byAreaAndType, percentages, areaPercentages });
 });
 
 app.get('/insights', async (req, res) => {
   const allReports = await getAllReports();
-  const todayStart = new Date().setHours(0,0,0,0);
-  const yesterdayStart = todayStart - 86400000;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const todayReports = allReports.filter(r => new Date(r.timestamp || r.created_at).getTime() >= todayStart);
   
-  const todayReports = allReports.filter(r => new Date(r.timestamp || r.created_at) >= todayStart);
-  const yesterdayReports = allReports.filter(r => new Date(r.timestamp || r.created_at) >= yesterdayStart && new Date(r.timestamp || r.created_at) < todayStart);
-
   const nudges = [];
-  if (todayReports.length > yesterdayReports.length && yesterdayReports.length > 0) {
-    nudges.push({ type: 'warning', text: 'Activity increasing today.' });
-  } else {
-    nudges.push({ type: 'info', text: 'System stable.' });
+
+  // 1. Check for Hotspots (Areas with >= 3 reports)
+  const byArea = todayReports.reduce((acc, r) => { acc[r.area] = (acc[r.area] || 0) + 1; return acc; }, {});
+  for (const [area, count] of Object.entries(byArea)) {
+    if (count >= 3 && area !== "Choice Pending...") {
+      nudges.push({ type: 'alert', text: `HOTSPOT: Multiple reports in ${area}.` });
+    }
+  }
+
+  // 2. Resource Spike (More than 5 reports of one type)
+  const byType = todayReports.reduce((acc, r) => { acc[r.resource_type] = (acc[r.resource_type] || 0) + 1; return acc; }, {});
+  if (byType['water'] > 5) nudges.push({ type: 'warning', text: 'Water supply issues detected.' });
+  if (byType['electricity'] > 5) nudges.push({ type: 'warning', text: 'Power outages being reported.' });
+
+  // 3. Positive Nudge
+  if (todayReports.length > 0 && nudges.length === 0) {
+    nudges.push({ type: 'success', text: 'Active community monitoring in progress.' });
+  }
+
+  // Default
+  if (nudges.length === 0) {
+    nudges.push({ type: 'info', text: 'EcoTracker: System stable and monitoring.' });
   }
 
   res.json(nudges);
@@ -205,18 +281,29 @@ app.all('/webhook/check-user', async (req, res) => {
 
 // Unified Exotel handler
 app.all('/webhook/exotel', async (req, res) => {
-  console.log('--- Incoming Exotel Webhook ---');
   const data = { ...req.query, ...req.body };
+  console.log('--- Incoming Exotel Webhook ---');
+  console.log('Step:', data.step || 'No Step');
+  console.log('Digits Received:', data.digits || data.Digits || 'None');
+  
   const phone = data.CallFrom || data.From;
   let digits = data.digits || data.Digits;
-  if (digits) digits = digits.toString().replace(/"/g, '');
+  if (digits) digits = digits.toString().replace(/"/g, '').trim();
 
-  // Step A: Save Location
-  if (data.step === 'location') {
+  // Step 1: Save Language Choice
+  if (data.step === 'language' || req.query.step === 'language') {
+    const langMap = { "1": "kn", "2": "hi", "3": "en" };
+    const lang = langMap[digits] || "en";
+    await saveUserProfile(phone, { language: lang });
+    console.log(`✅ Saved Language for ${phone}: ${lang}`);
+    return res.send('success');
+  }
+
+  // Step 2: Save Location Choice
+  if (data.step === 'location' || req.query.step === 'location') {
     const area = determineArea(phone, digits);
-    await saveUserProfile(phone, area);
+    await saveUserProfile(phone, { location: area });
     
-    // Update the latest report for this phone number to the correct area
     if (useSupabase) {
       const { data: latest } = await supabase
         .from('reports')
@@ -230,19 +317,25 @@ app.all('/webhook/exotel', async (req, res) => {
       }
     }
     
-    console.log(`Updated Profile and Report for ${phone}: ${area}`);
+    console.log(`✅ Updated Profile and Report for ${phone}: ${area}`);
     return res.send('success');
   }
 
-  // Step B: Save Report
+  // Step 3: Save Report
   const profile = await getUserProfile(phone);
   const resource_type = digits === '1' ? 'water' : digits === '2' ? 'electricity' : 'waste';
-  
-  // If we have a profile, use it. If not, mark as Pending.
-  const area = profile ? profile.location : "Choice Pending...";
+  let area = "Choice Pending...";
+  if (profile && profile.location) {
+    area = typeof profile.location === 'object' ? profile.location.location || "Choice Pending..." : profile.location;
+  }
   
   await saveReport(phone, resource_type, area);
-  console.log(`Logged Report for ${phone}: ${resource_type} (Area: ${area})`);
+  console.log(`✅ Logged Report for ${phone}: ${resource_type} (Area: ${area})`);
+
+  // Send SMS confirmation
+  const smsMessage = `EcoTracker: Your ${resource_type} complaint for ${area} has been registered. We are on it. Thank you for helping keep Dharwad clean!`;
+  sendSMS(phone, smsMessage);
+
   res.send('success');
 });
 
