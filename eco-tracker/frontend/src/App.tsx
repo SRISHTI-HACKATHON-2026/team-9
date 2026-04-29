@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
-import { Droplet, Zap, Trash2, PhoneCall, AlertTriangle, TrendingDown, TrendingUp, Info, Activity, MapPin, Shield, Lock, Mail, Key, ArrowRight, UserPlus, LogOut, Smartphone, MessageSquare } from 'lucide-react';
+import { Droplet, Zap, Trash2, PhoneCall, AlertTriangle, TrendingDown, TrendingUp, Info, Activity, MapPin, Shield, Mail, Key, ArrowRight, LogOut, Smartphone, MessageSquare } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3002';
@@ -45,7 +45,7 @@ function App() {
   const [simulating, setSimulating] = useState(false);
   const [simIntent, setSimIntent] = useState<'need' | 'waste'>('waste');
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-  const [latestSms, setLatestSms] = useState<{phone: string, text: string, time: string} | null>(null);
+  const [latestSms] = useState<{phone: string, text: string, time: string} | null>(null);
 
   useEffect(() => {
     // Check active session

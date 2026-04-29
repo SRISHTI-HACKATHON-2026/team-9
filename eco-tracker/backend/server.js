@@ -13,6 +13,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // TEST ENDPOINT
+app.get('/', (req, res) => {
+  res.send('EcoTracker Backend API is Running!');
+});
+
 app.get('/test', (req, res) => {
   res.send('Server is Live and Running Latest Code!');
 });
@@ -35,7 +39,8 @@ async function triggerExotelCall(toPhone, area, resource) {
     params.append('From', EXOTEL_VIRTUAL_NUMBER); 
     params.append('To', toPhone);
     params.append('CallerId', EXOTEL_VIRTUAL_NUMBER);
-    params.append('Url', `${process.env.NGROK_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`);
+    const BACKEND_URL = process.env.BACKEND_URL || process.env.NGROK_URL || '';
+    params.append('Url', `${BACKEND_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`);
 
     const response = await axios.post(url, params, {
       auth: { username: EXOTEL_KEY, password: EXOTEL_TOKEN }
@@ -66,7 +71,8 @@ async function triggerTwilioCall(toPhone, area, resource) {
     const params = new URLSearchParams();
     params.append('To', cleanPhone);
     params.append('From', from);
-    params.append('Url', `${process.env.NGROK_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`);
+    const BACKEND_URL = process.env.BACKEND_URL || process.env.NGROK_URL || '';
+    params.append('Url', `${BACKEND_URL}/webhook/status-update?area=${encodeURIComponent(area)}&resource=${encodeURIComponent(resource)}`);
 
     const response = await axios.post(url, params, {
       auth: { username: sid, password: token }
@@ -304,7 +310,12 @@ app.get('/stats', async (req, res) => {
     }
   }
 
-  const score = Math.max(0, 100 - (totalToday * 5));
+  const unresolvedCount = todayReports.filter(r => r.status !== 'resolved').length;
+  const resolvedCount = todayReports.filter(r => r.status === 'resolved').length;
+  
+  // Base score is 100. Each unresolved report drops it by 10. 
+  // Each resolution recovers the score.
+  const score = Math.min(100, Math.max(0, 100 - (unresolvedCount * 10)));
   res.json({
     score, totalToday, byType, byArea,
     byAreaAndType, byIntent, byAreaAndIntent,
@@ -507,7 +518,7 @@ app.post('/webhook/process', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3002;
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== 'production' && require.main === module) {
   app.listen(PORT, () => console.log(`Backend server running on port ${PORT}`));
 }
 
