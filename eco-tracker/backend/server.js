@@ -187,18 +187,20 @@ function determineArea(phone_number, input_digits) {
 
 // USER PROFILE LOGIC
 async function getUserProfile(phone_number) {
+  const cleanPhone = normalizePhone(phone_number);
   if (!useSupabase) return null;
   const { data, error } = await supabase
     .from('user_profiles')
     .select('*')
-    .eq('phone_number', phone_number)
+    .eq('phone_number', cleanPhone)
     .single();
   return data || null;
 }
 
 async function saveUserProfile(phone_number, profileData) {
+  const cleanPhone = normalizePhone(phone_number);
   if (!useSupabase) return;
-  const updateData = { phone_number };
+  const updateData = { phone_number: cleanPhone };
   if (profileData.location) updateData.location = profileData.location;
   if (profileData.language) updateData.language = profileData.language;
   if (profileData.intent) updateData.intent = profileData.intent;
@@ -208,16 +210,15 @@ async function saveUserProfile(phone_number, profileData) {
     .upsert(updateData, { onConflict: 'phone_number' });
     
   if (error) console.error('❌ [Supabase] Profile Save Error:', error.message);
-  else console.log(`✅ [Supabase] Profile updated for ${phone_number}`);
+  else console.log(`✅ [Supabase] Profile updated for ${cleanPhone}`);
 }
 
 async function saveReport(phone_number, resource_type, area, intent = 'waste') {
-  const newReport = { phone_number, resource_type, area, intent, timestamp: new Date() };
-
+  const cleanPhone = normalizePhone(phone_number);
   if (useSupabase) {
     const { data, error } = await supabase
       .from('reports')
-      .insert([{ phone_number, resource_type, area, intent }])
+      .insert([{ phone_number: cleanPhone, resource_type, area, intent }])
       .select();
 
     if (error) console.error('Error saving report to Supabase:', error);
@@ -237,6 +238,11 @@ async function getAllReports() {
     return [];
   }
   return data || [];
+}
+
+function normalizePhone(phone) {
+  if (!phone) return '';
+  return phone.toString().replace(/[^0-9]/g, '').slice(-10);
 }
 
 // API Endpoints
